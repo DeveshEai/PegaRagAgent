@@ -9,10 +9,36 @@ Features:
 """
 
 import os
-# Suppress Streamlit module watcher checking uninstalled vision packages in transformers
+import sys
+import logging
+import warnings
+
+# Suppress Streamlit module watcher and Hugging Face warnings
 os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+warnings.filterwarnings("ignore")
+
+# Patch Streamlit's local_sources_watcher to ignore transformers/torch packages
+# This prevents Streamlit from lazily probing uninstalled optional vision modules (torchvision)
+try:
+    import streamlit.watcher.local_sources_watcher as _lsw
+    _orig_get_module_paths = _lsw.get_module_paths
+    def _safe_get_module_paths(module):
+        mod_name = getattr(module, "__name__", "")
+        if mod_name.startswith("transformers") or mod_name.startswith("torch"):
+            return set()
+        return _orig_get_module_paths(module)
+    _lsw.get_module_paths = _safe_get_module_paths
+    _lsw._LOGGER.setLevel(logging.ERROR)
+except Exception:
+    pass
+
+try:
+    import transformers.utils.logging as _t_log
+    _t_log.set_verbosity_error()
+except Exception:
+    pass
 
 import shutil
 import time
