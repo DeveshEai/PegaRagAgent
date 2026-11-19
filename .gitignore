@@ -47,3 +47,13 @@ PEGA SCRAP.zip
 *.bak
 *.log
 
+# Folders
+# Local RAG database
+pega_rag_db/
+
+# Downloaded course materials
+Lead System Architect/
+
+# Personal project notes
+Devesh-Pega-RAG-info.md
+remaining_audit.md

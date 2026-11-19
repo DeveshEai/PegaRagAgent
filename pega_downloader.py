@@ -6,7 +6,10 @@ Downloads all 27 modules of Lead System Architect v7 as official clean PDFs.
 
 import asyncio, os, re, sys, io, time
 from pathlib import Path
+from dotenv import load_dotenv
 from playwright.async_api import async_playwright
+
+load_dotenv(Path(__file__).parent / ".env")
 
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -15,7 +18,8 @@ if sys.platform == "win32":
 BASE_DIR = Path(__file__).parent / "Lead System Architect"
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
-COOKIE_VAL = "smJ0VPW0ig9UFhgDt1DijSyritSR0w9eKL0zU47zCxul231J"
+COOKIE_NAME = os.environ.get("PEGA_SESSION_COOKIE_NAME", "SSESS7320634c8bd6f7dc1a41435835961d4c").strip()
+COOKIE_VAL = os.environ.get("PEGA_SESSION_COOKIE", "").strip()
 
 # COMPLETE CURRICULUM OF LEAD SYSTEM ARCHITECT (v7)
 CURRICULUM = {
@@ -68,6 +72,10 @@ async def main():
     print("  PEGA ACADEMY - LEAD SYSTEM ARCHITECT COMPLETE PDF EXTRACTOR")
     print("=" * 65)
 
+    if not COOKIE_VAL:
+        print("Error: PEGA_SESSION_COOKIE is not set. Please configure it in .env before running the downloader.")
+        return
+
     total_modules = sum(len(mods) for mods in CURRICULUM.values())
     print(f"\nTotal modules to download across all 5 sections: {total_modules}\n")
 
@@ -77,7 +85,7 @@ async def main():
             viewport={"width": 1400, "height": 1000}
         )
         await context.add_cookies([
-            {"name": "SSESS7320634c8bd6f7dc1a41435835961d4c", "value": COOKIE_VAL, "domain": ".academy.pega.com", "path": "/"}
+            {"name": COOKIE_NAME, "value": COOKIE_VAL, "domain": ".academy.pega.com", "path": "/"}
         ])
         page = await context.new_page()
 

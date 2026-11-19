@@ -4,7 +4,7 @@
 
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.40+-FF4B4B.svg)](https://streamlit.io)
 [![ChromaDB](https://img.shields.io/badge/Vector%20DB-ChromaDB-blue.svg)](https://www.trychroma.com/)
-[![Groq](https://img.shields.io/badge/LLM%20Inference-Groq%20Cloud-orange.svg)](https://groq.com/)
+[![Groq](https://img.shields.io/badge/LLM%20Inference-Groq%20Cloud-orange.svg)](https://groq.com/)  
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 

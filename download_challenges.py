@@ -7,15 +7,20 @@ and solutions across the Lead System Architect v7 course as clean PDFs!
 
 import asyncio, os, re, sys, io, time
 from pathlib import Path
+from dotenv import load_dotenv
 from playwright.async_api import async_playwright
+
+load_dotenv(Path(__file__).parent / ".env")
 
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 BASE_DIR = Path(__file__).parent / "Lead System Architect"
-COOKIE_VAL = "9AWihnhurK8NxqPTORy3VOwXhTNHxgjHH1YED8bSmTRd59Ab"
-TA_VAL     = "262a7ebd-7866-435c-87ed-a008e47efe04|NEW"
+COOKIE_NAME = os.environ.get("PEGA_SESSION_COOKIE_NAME", "SSESS7320634c8bd6f7dc1a41435835961d4c").strip()
+COOKIE_VAL = os.environ.get("PEGA_SESSION_COOKIE", "").strip()
+TA_VAL = os.environ.get("PEGA_TA_SESSION_ID", "").strip()
+HELLO_DATA = os.environ.get("PEGA_HELLO_DATA", "").strip()
 
 ALL_CHALLENGES = [
     # 02_Planning_and_Design
@@ -72,18 +77,25 @@ async def main():
     print("  PEGA ACADEMY - ALL 40 HANDS-ON CHALLENGES PDF DOWNLOADER")
     print("=" * 65)
 
+    if not COOKIE_VAL:
+        print("Error: PEGA_SESSION_COOKIE is not set. Please configure it in .env before running the downloader.")
+        return
+
     total = len(ALL_CHALLENGES)
     print(f"\nTotal challenges to download: {total}\n")
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(viewport={"width": 1400, "height": 1000})
-        await context.add_cookies([
-            {"name": "SSESS7320634c8bd6f7dc1a41435835961d4c", "value": COOKIE_VAL, "domain": ".academy.pega.com", "path": "/"},
-            {"name": "TAsessionID", "value": TA_VAL, "domain": ".academy.pega.com", "path": "/"},
-            {"name": "hellodata", "value": "Devesh%2C", "domain": ".pega.com", "path": "/"},
+        cookies = [
+            {"name": COOKIE_NAME, "value": COOKIE_VAL, "domain": ".academy.pega.com", "path": "/"},
             {"name": "PERSISTENT_LOGIN_PEGASSO_PROD", "value": "1", "domain": ".pega.com", "path": "/"}
-        ])
+        ]
+        if TA_VAL:
+            cookies.append({"name": "TAsessionID", "value": TA_VAL, "domain": ".academy.pega.com", "path": "/"})
+        if HELLO_DATA:
+            cookies.append({"name": "hellodata", "value": HELLO_DATA, "domain": ".pega.com", "path": "/"})
+        await context.add_cookies(cookies)
         page = await context.new_page()
 
         success = 0
