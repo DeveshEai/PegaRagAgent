@@ -19,10 +19,23 @@ _EXPORT_MAP = {
     "execute_direct_grounded_fallback": "agents.answer_generator",
     "generate_answer": "agents.answer_generator",
     "stream_answer": "agents.answer_generator",
+    "detect_output_format": "agents.answer_generator",
     "AGENT_SYSTEM_PROMPT": "agents.research_agent",
     "should_use_agent_loop": "agents.research_agent",
+    "detect_conversational_intent": "agents.research_agent",
+    "classify_query_intent": "agents.research_agent",
+    "evaluate_evidence_sufficiency": "agents.research_agent",
     "run_agent": "agents.research_agent",
     "run_agent_stream": "agents.research_agent",
+    "run_adaptive": "agents.research_agent",
+    "run_adaptive_stream": "agents.research_agent",
+    "RoutingMetricsTracker": "agents.routing_eval",
+    "PEGA_ROUTING_EVAL_DATASET": "agents.routing_eval",
+    "evaluate_routing_suite": "agents.routing_eval",
+    "format_routing_eval_report": "agents.routing_eval",
+    "get_routing_observability_summary": "agents.routing_eval",
+    "record_routing_event": "agents.routing_eval",
+    "sanitize_routing_record": "agents.routing_eval",
 }
 
 __all__ = list(_EXPORT_MAP.keys())

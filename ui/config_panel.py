@@ -2,7 +2,12 @@
 
 import streamlit as st
 
-from rag_engine import get_model_spec, is_tool_capable_model
+from rag_engine import (
+    ENABLE_ADAPTIVE_ROUTING,
+    get_model_spec,
+    get_routing_observability_summary,
+    is_tool_capable_model,
+)
 from ui.styles import LUCIDE_ICONS
 
 
@@ -70,6 +75,24 @@ def render_config_panel() -> None:
             ],
             key="cfg_mode"
         )
+
+        st.toggle(
+            "Adaptive RAG Routing (Auto-Select)",
+            key="cfg_adaptive_routing",
+            help="Automatically routes queries between Direct RAG and Autonomous CLSA Agent with evidence-based escalation."
+        )
+        adaptive_active = bool(st.session_state.get("cfg_adaptive_routing", ENABLE_ADAPTIVE_ROUTING))
+        obs = get_routing_observability_summary()
+        st.caption(
+            f"Adaptive RAG: **{'Active' if adaptive_active else 'Disabled (Manual Mode)'}**"
+            + (f" · Queries: {obs['total_queries']} · Escalations: {obs['escalation_count']}" if obs["total_queries"] > 0 else "")
+        )
+        if obs["total_queries"] > 0:
+            with st.expander("Routing Observability", expanded=False):
+                st.caption(
+                    f"Direct RAG: {obs['direct_rag_count']} | Agent: {obs['autonomous_agent_count']} | "
+                    f"Escalations: {obs['escalation_count']} | Avg Router Latency: {obs['avg_router_latency_ms']} ms"
+                )
 
         st.slider(
             "Hybrid Weight (0=BM25 · 1=Vector)",

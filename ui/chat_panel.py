@@ -8,9 +8,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from rag_engine import (
+    ENABLE_ADAPTIVE_ROUTING,
     clean_chunk_content,
     contextualize_query_with_history,
     deduplicate_sources,
+    detect_output_format,
 )
 from ui.state import queue_user_query
 from ui.styles import LUCIDE_ICONS
@@ -28,7 +30,7 @@ def format_citation_badges_html(sources: list, max_badges: int = 3) -> str:
         badges.append(
             f'<span class="citation-badge">{LUCIDE_ICONS["file"]} {fname} · p.{page} · {section}</span>'
         )
-    return f'<div class="citation-row">{"".join(badges)}</div>'
+    return f'<div class="citation-row" style="margin-top: 10px; margin-bottom: 6px;">{"".join(badges)}</div>'
 
 
 def render_compact_evidence(sources: list, max_display: int = 3) -> None:
@@ -58,6 +60,48 @@ def render_compact_evidence(sources: list, max_display: int = 3) -> None:
             """, unsafe_allow_html=True)
 
 
+def render_execution_details(exec_meta: Any, has_visible_sources: bool = False) -> None:
+    """Render an expandable execution-metadata section from actual pipeline outputs."""
+    if not isinstance(exec_meta, dict) or not exec_meta:
+        return
+    strategy = str(exec_meta.get("execution_strategy") or "Direct RAG")
+    with st.expander("Execution Details", expanded=False):
+        if strategy == "Conversation":
+            st.caption("Execution strategy: Conversation")
+            st.caption("Retrieval: Not performed")
+            st.caption("Citations: Not applicable")
+            return
+
+        intent = exec_meta.get("detected_intent", "UNKNOWN")
+        router_model = exec_meta.get("router_model", "deterministic")
+        evidence_status = exec_meta.get("evidence_status", "Unknown")
+        cite_ver = exec_meta.get("citation_verification", "Not applicable")
+        if isinstance(cite_ver, dict):
+            cite_str = f"verified={cite_ver.get('verified', 0)}, removed={cite_ver.get('removed', 0)}, mismatched={cite_ver.get('mismatched_claims', 0)}"
+        else:
+            cite_str = str(cite_ver)
+
+        docs = exec_meta.get("documents_consulted") or []
+        if has_visible_sources and docs:
+            doc_str = f"{len(docs)} unique location(s) (listed in Sources above)"
+        else:
+            doc_str = ", ".join(f"{d.get('source')} (p.{d.get('page')})" for d in docs) if docs else "None"
+
+        st.caption(f"Detected intent: `{intent}` · Format: `{exec_meta.get('output_format', 'PARAGRAPH')}`")
+        st.caption(f"Execution strategy: `{strategy}` · Router: `{router_model}`")
+        if strategy == "Autonomous CLSA Agent":
+            tools = exec_meta.get("tools_used") or []
+            tools_str = ", ".join(tools) if tools else "None"
+            st.caption(f"Research tools used: {tools_str} · Searches: {exec_meta.get('search_count', 0)}")
+            st.caption(f"Escalation: {exec_meta.get('escalation_status', 'Not escalated')} · Evidence: {evidence_status}")
+            st.caption(f"Citation verification: {cite_str}")
+            st.caption(f"Documents & pages consulted: {doc_str}")
+        else:
+            st.caption(f"Evidence sufficiency: {evidence_status}")
+            st.caption(f"Citation verification: {cite_str}")
+            st.caption(f"Retrieved documents & pages: {doc_str}")
+
+
 def stream_assistant_turn(engine: Any, query_text: str) -> None:
     """Streams the assistant's response progressively inside the active chat bubble."""
     prior_history = [
@@ -82,9 +126,26 @@ def stream_assistant_turn(engine: Any, query_text: str) -> None:
         accumulated_text = ""
         final_answer = ""
         final_sources = []
+        final_exec_meta = None
 
         try:
-            if mode.startswith("Autonomous"):
+            adaptive_enabled = bool(st.session_state.get("cfg_adaptive_routing", ENABLE_ADAPTIVE_ROUTING))
+            if adaptive_enabled:
+                exec_mode = "adaptive" if mode.startswith("Autonomous") else "direct"
+                event_stream = engine.run_adaptive_stream(
+                    query=query_text,
+                    groq_api_key=api_key,
+                    model_name=model_name,
+                    temperature=temperature,
+                    max_iterations=4,
+                    chat_history=prior_history,
+                    top_k=top_k,
+                    use_reranker=use_reranker,
+                    dense_weight=dense_weight,
+                    section_filter=section_filter,
+                    execution_mode=exec_mode,
+                )
+            elif mode.startswith("Autonomous"):
                 event_stream = engine.run_agent_stream(
                     query=query_text,
                     groq_api_key=api_key,
@@ -99,6 +160,27 @@ def stream_assistant_turn(engine: Any, query_text: str) -> None:
                 )
             else:
                 def _direct_stream():
+                    conv = engine.detect_conversational_intent(query_text) if hasattr(engine, "detect_conversational_intent") else None
+                    if conv is not None:
+                        yield {
+                            "type": "final",
+                            "answer": conv["answer"],
+                            "sources": [],
+                            "execution_meta": {
+                                "execution_strategy": "Conversation",
+                                "detected_intent": "CONVERSATIONAL",
+                                "output_format": "Not applicable",
+                                "router_model": "deterministic",
+                                "evidence_status": "Not applicable",
+                                "escalation_status": "Not escalated",
+                                "tools_used": [],
+                                "search_count": 0,
+                                "documents_consulted": [],
+                                "citation_verification": "Not applicable",
+                                "retrieval_performed": False,
+                            },
+                        }
+                        return
                     yield {"type": "status", "message": "Retrieving Pega curriculum excerpts (Hybrid BM25 + Vector + Reranker)..."}
                     contextual_query = contextualize_query_with_history(query_text, prior_history)
                     chunks = engine.search(
@@ -113,7 +195,20 @@ def stream_assistant_turn(engine: Any, query_text: str) -> None:
                         yield {
                             "type": "final",
                             "answer": "I could not find relevant sections in the indexed Pega documents for your question.",
-                            "sources": []
+                            "sources": [],
+                            "execution_meta": {
+                                "execution_strategy": "Direct RAG",
+                                "detected_intent": "TECHNICAL_EXPLANATION",
+                                "output_format": detect_output_format(query_text),
+                                "router_model": "manual",
+                                "evidence_status": "Insufficient",
+                                "escalation_status": "Not escalated",
+                                "tools_used": [],
+                                "search_count": 1,
+                                "documents_consulted": [],
+                                "citation_verification": {"verified": 0, "removed": 0, "mismatched_claims": 0},
+                                "retrieval_performed": True,
+                            },
                         }
                         return
                     yield {"type": "status", "message": "Generating grounded response..."}
@@ -125,6 +220,26 @@ def stream_assistant_turn(engine: Any, query_text: str) -> None:
                         temperature=temperature,
                         chat_history=prior_history
                     ):
+                        if ev.get("type") == "final":
+                            ev = {
+                                **ev,
+                                "execution_meta": {
+                                    "execution_strategy": "Direct RAG",
+                                    "detected_intent": "TECHNICAL_EXPLANATION",
+                                    "output_format": ev.get("output_format") or detect_output_format(query_text),
+                                    "router_model": "manual",
+                                    "evidence_status": "Sufficient",
+                                    "escalation_status": "Not escalated",
+                                    "tools_used": [],
+                                    "search_count": 1,
+                                    "documents_consulted": [
+                                        {"source": s.get("source"), "page": s.get("page"), "section": s.get("section")}
+                                        for s in (ev.get("sources") or [])
+                                    ],
+                                    "citation_verification": ev.get("citation_stats") or {"verified": 0, "removed": 0, "mismatched_claims": 0},
+                                    "retrieval_performed": True,
+                                },
+                            }
                         yield ev
                 event_stream = _direct_stream()
 
@@ -141,6 +256,7 @@ def stream_assistant_turn(engine: Any, query_text: str) -> None:
                     status_ph.empty()
                     final_answer = ev.get("answer") or accumulated_text
                     final_sources = deduplicate_sources(ev.get("sources") or [])
+                    final_exec_meta = ev.get("execution_meta")
                     stream_ph.markdown(final_answer)
         except Exception as exc:
             status_ph.empty()
@@ -151,6 +267,7 @@ def stream_assistant_turn(engine: Any, query_text: str) -> None:
         "role": "assistant",
         "content": final_answer or accumulated_text or "No response generated.",
         "sources": final_sources,
+        "execution_meta": final_exec_meta,
         "timestamp": datetime.now().strftime("%H:%M")
     })
     st.session_state.pending_response = False
@@ -215,6 +332,7 @@ def render_chat_panel(engine: Any) -> None:
                         if srcs:
                             st.markdown(format_citation_badges_html(srcs, max_badges=3), unsafe_allow_html=True)
                             render_compact_evidence(srcs, max_display=3)
+                        render_execution_details(msg.get("execution_meta"), has_visible_sources=bool(srcs))
                         if ts:
                             st.markdown(f'<div class="msg-meta">{ts}</div>', unsafe_allow_html=True)
 

@@ -106,6 +106,24 @@ def test_verify_citations_reference_validation_and_contextualize():
     assert stats["verified"] == 1
     assert stats["removed"] == 1
 
+    # Stage 4 defect fix: preserve Markdown hard line breaks, indentation, paragraphs, and tables
+    md_answer = (
+        "Summary line  \n"
+        "Next line after hard break.\n\n"
+        "- Parent bullet [01_bg.pdf, Page 11]\n"
+        "  - Indented sub-bullet\n"
+        "1. Numbered step [fake.pdf, Page 99]\n\n"
+        "| Col1 | Col2 |\n"
+        "| --- | --- |\n"
+        "| Val1 | Val2 |"
+    )
+    md_cleaned, md_stats = rag_engine.verify_citations(md_answer, sources)
+    assert "Summary line  \nNext line" in md_cleaned
+    assert "\n  - Indented sub-bullet" in md_cleaned
+    assert "1. Numbered step\n\n| Col1 | Col2 |" in md_cleaned
+    assert md_stats["verified"] == 1
+    assert md_stats["removed"] == 1
+
     # Contextualize short follow-up vs empty history
     assert rag_engine.contextualize_query_with_history("What is pyWorkPage?", []) == "What is pyWorkPage?"
     rewritten = rag_engine.contextualize_query_with_history(
@@ -113,6 +131,36 @@ def test_verify_citations_reference_validation_and_contextualize():
         [{"role": "user", "content": "Explain Queue Processors in Pega."}],
     )
     assert "Queue Processors" in rewritten
+
+    # Stage 1 defect fix: 'its' / 'their' resolution and multi-turn subject lookup
+    rewritten_its = rag_engine.contextualize_query_with_history(
+        "What about its caching strategy?",
+        [
+            {"role": "user", "content": "Explain Data Pages in Pega."},
+            {"role": "assistant", "content": "Data Pages load and cache data on demand."},
+        ],
+    )
+    assert "Data Pages" in rewritten_its
+    assert "caching strategy" in rewritten_its
+
+    # Multi-turn follow-up skips bare pronoun follow-up to find the real subject
+    rewritten_multi = rag_engine.contextualize_query_with_history(
+        "What about their refresh strategy?",
+        [
+            {"role": "user", "content": "Explain Data Pages in Pega."},
+            {"role": "assistant", "content": "Data Pages cache data across scopes."},
+            {"role": "user", "content": "What about its scopes?"},
+            {"role": "assistant", "content": "Thread, Requestor, and Node scopes."},
+        ],
+    )
+    assert "Data Pages" in rewritten_multi
+
+    # Standalone long technical query without pronouns is NOT polluted by old history
+    standalone = "Explain how Queue Processors process delayed items in Pega background processing."
+    assert rag_engine.contextualize_query_with_history(
+        standalone,
+        [{"role": "user", "content": "Explain Data Pages in Pega."}],
+    ) == standalone
 
 
 def test_retrieval_modules_reexport_identity_and_independence():

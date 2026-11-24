@@ -2,6 +2,7 @@
 Answer generation, streaming, completeness guards, model resolution/fallback,
 and direct grounded fallback for PegaRagAgent.
 """
+#Match depth to complexity: 80–150 words for simple definitions, 150–300 words for technical explanations/comparisons, and full architectural depth for complex scenarios.\n"
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -34,19 +35,48 @@ def is_context_length_error(err_msg: str) -> bool:
 
 
 GROUNDED_SYSTEM_PROMPT = (
-    "You are a Senior Pega Certified Lead System Architect (CLSA) advising a fellow architect in a natural, conversational peer-to-peer style.\n\n"
-    "RESPONSE STYLE & COMPLEXITY:\n"
-    "1. Answer directly from the first sentence without mandatory or formulaic headings (never use boilerplate headers such as 'Short answer', 'What the excerpts actually tell us', 'Implication for architecture and governance', or repetitive 'Bottom line' wrap-ups).\n"
-    "2. Match length to question complexity:\n"
-    "   - Simple definitions (e.g., 'What is X?'): 80–150 words.\n"
-    "   - Technical explanations or comparisons: 150–300 words.\n"
-    "   - Complex architecture scenarios: as detailed as necessary.\n"
-    "3. Include practical Pega examples (e.g., `pyWorkPage`, `Queue Processor`, `Job Scheduler`, `Rule-Obj-Class`, `Work-`, `Data-`, `Int-`) and explain architectural implications (performance, locking, reusability, governance) when genuinely relevant.\n\n"
-    "STRICT GROUNDING & CITATION INTEGRITY:\n"
-    "4. Clearly separate retrieved evidence from general Pega knowledge: cite `[filename, Page X, Section: Y]` only for claims directly supported by the provided excerpts.\n"
-    "5. Never present general Pega knowledge as if it came from the retrieved documents, and never invent citations or attach unrelated sources to a claim.\n"
-    "6. If the retrieved excerpts lack sufficient detail, explicitly state that gap (for example: 'The retrieved curriculum excerpts do not cover ...') and still provide helpful general Pega CLSA guidance clearly marked as general knowledge without citations."
+    "You are a Senior Pega Certified Lead System Architect (CLSA) advising a fellow architect in a direct, confident, peer-to-peer colleague style.\n\n"
+    "PEGA CLSA COMMUNICATION & FORMATTING:\n"
+    "1. Lead immediately with a clear, practical answer—skip generic AI greetings, filler introductions, and formulaic headings ('Short answer', 'What the excerpts actually tell us', 'Implication for architecture and governance', 'Bottom line').\n"
+    "2. Connect business impact with technical Pega implementation using concrete artifacts (e.g., `pyWorkPage`, `D_*` Data Pages, `Queue Processor`, `Job Scheduler`, `Rule-Obj-Class`, `Work-`, `Data-`, `Int-`) when relevant.\n"
+    "3. Maintain strict Pega terminology accuracy:\n"
+    "   - Never conflate `Queue Processor` (asynchronous Kafka-backed background processing) with `Work Queue` / `Workbasket` (human task assignment and routing).\n"
+    "   - For stale Data Page or caching troubleshooting, separate configuration-dependent causes—scope (`Thread`, `Requestor`, `Node`), refresh strategy, reload conditions, explicit invalidation, source freshness, and node vs. cluster behavior—without assuming unstated configuration.\n"
+    "4. Strictly honor requested output formats:\n"
+    "   - Comparisons (`compare`, `vs`, `difference`) MUST default to a clean Markdown comparison table.\n"
+    "   - Explicit requests for a table, bulleted list, numbered steps, or concrete example MUST use that exact format.\n"
+    "5. Match the depth, detail and structure of the answer to the complexity of the user's question. Be concise without sacrificing technical completeness.\n"
+    "6. Follow-up policy: When genuinely helpful to clarify Pega version, UI (`Constellation` vs `Theme Cosmos`), scope, or next implementation step, end with one brief, relevant follow-up question. Never force generic closing statements.\n\n"
+    "CONDITIONAL GROUNDING & CITATION INTEGRITY:\n"
+    "7. Attach compact inline citations `[filename, Page X, Section: Y]` ONLY to claims supported by the provided excerpts (including inside table cells or list items). Never invent citations or present general Pega knowledge as retrieved document evidence.\n"
+    "8. If retrieved excerpts are insufficient or do not directly support the question, state the knowledge gap concisely and stop—do NOT pad with speculative explanations or unsupported general-knowledge filler."
 )
+
+
+def detect_output_format(query: str) -> str:
+    """Detect the requested output format: TABLE, BULLETS, NUMBERED_STEPS, EXAMPLE, or PARAGRAPH."""
+    q_low = (query or "").lower().strip()
+    if any(k in q_low for k in ("table", "tabular", "matrix", "side-by-side", "side by side", "compare ", " vs ", "versus", "difference between", "differences between", "pros and cons")):
+        return "TABLE"
+    if any(k in q_low for k in ("step-by-step", "step by step", "numbered", "steps to", "walkthrough", "how do i configure", "how to configure")):
+        return "NUMBERED_STEPS"
+    if any(k in q_low for k in ("bullet", "bullets", "bulleted", "list ", "key points", "summarize", "summary", "highlights")):
+        return "BULLETS"
+    if any(k in q_low for k in ("example", "sample", "scenario", "use case", "illustrate")):
+        return "EXAMPLE"
+    return "PARAGRAPH"
+
+
+def _format_instruction(output_format: str) -> str:
+    """Return a concise prompt instruction matching the requested output format."""
+    mapping = {
+        "TABLE": "Format your comparison or answer primarily as a clean Markdown table with concise cells and inline citations `[filename, Page X, Section: Y]` where supported.",
+        "NUMBERED_STEPS": "Format the procedure as clear numbered steps (`1.`, `2.`, `3.`, ...) with inline citations `[filename, Page X, Section: Y]` where supported.",
+        "BULLETS": "Format the key points as a concise bulleted list with inline citations `[filename, Page X, Section: Y]` where supported.",
+        "EXAMPLE": "Include a concrete, practical Pega example/scenario grounded in the excerpts with inline citations `[filename, Page X, Section: Y]` where supported.",
+        "PARAGRAPH": "Answer clearly and naturally using only the verified excerpts above, with compact inline citations `[filename, Page X, Section: Y]`.",
+    }
+    return mapping.get(output_format, mapping["PARAGRAPH"])
 
 
 def find_best_alternative_model(client: Groq, current_model: str) -> Optional[str]:
@@ -104,16 +134,34 @@ def resolve_available_model(client: Groq, requested_model: Optional[str]) -> Tup
 
 
 def trim_to_last_complete_sentence(text: str) -> str:
-    """Trims a length-truncated response cleanly to the last complete sentence boundary."""
+    """
+    Trims a length-truncated response cleanly to the last complete sentence or
+    complete Markdown structure (table row, bullet item, numbered step, or complete line).
+    """
     if not text:
         return ""
     stripped = text.rstrip()
+    if stripped.endswith((".", "!", "?", "|")):
+        return stripped
+
     last_end = max(stripped.rfind("."), stripped.rfind("!"), stripped.rfind("?"))
+    last_nl = stripped.rfind("\n")
+
+    if last_nl != -1 and last_nl > len(stripped) * 0.4:
+        prefix = stripped[:last_nl].rstrip()
+        prev_line = prefix.splitlines()[-1].strip() if prefix else ""
+        is_complete_md_line = (
+            prev_line.endswith((".", "!", "?", "|"))
+            or prev_line.startswith(("- ", "* ", "• "))
+            or bool(prev_line and prev_line[0].isdigit() and ". " in prev_line[:6])
+        )
+        if is_complete_md_line and last_nl >= last_end:
+            return prefix
+
     if last_end != -1 and last_end > len(stripped) * 0.4:
         return stripped[:last_end + 1]
-    last_nl = stripped.rfind("\n")
     if last_nl != -1 and last_nl > len(stripped) * 0.4:
-        return stripped[:last_nl]
+        return stripped[:last_nl].rstrip()
     return stripped
 
 
@@ -274,7 +322,8 @@ def execute_direct_grounded_fallback(
     top_k: int = DEFAULT_FINAL_EVIDENCE_K,
     use_reranker: bool = True,
     dense_weight: float = 0.5,
-    section_filter: Optional[str] = None
+    section_filter: Optional[str] = None,
+    output_format: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Direct Grounded Retrieval Fallback when a model does not support Groq function/tool calling
@@ -330,12 +379,14 @@ def execute_direct_grounded_fallback(
         "summary": f"Retrieved {len(retained_sources)} top-ranked Pega curriculum excerpts via Hybrid Search (Dense + BM25 RRF + Reranker)."
     })
 
+    resolved_format = output_format or detect_output_format(query)
     system_prompt = GROUNDED_SYSTEM_PROMPT
     user_content = (
         f"USER QUESTION:\n{query}\n\n"
+        f"REQUESTED OUTPUT FORMAT: {resolved_format}\n"
         f"OFFICIAL PEGA ACADEMY CONTEXT EXCERPTS:\n"
         f"{context_str}\n\n"
-        f"Answer clearly and naturally using only the verified excerpts above, with compact inline citations `[filename, Page X, Section: Y]`:"
+        f"{_format_instruction(resolved_format)}"
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -358,11 +409,13 @@ def execute_direct_grounded_fallback(
             max_tokens=max_completion_tokens
         )
         final_sources = deduplicate_sources(retained_sources)
-        verified_answer, _ = verify_citations(raw_answer or "No response generated.", final_sources)
+        verified_answer, cite_stats = verify_citations(raw_answer or "No response generated.", final_sources)
         return {
             "answer": verified_answer,
             "trace": execution_trace,
-            "sources": final_sources
+            "sources": final_sources,
+            "citation_stats": cite_stats,
+            "output_format": resolved_format,
         }
     except Exception as e:
         err_str = str(e)
@@ -459,7 +512,8 @@ def generate_answer(
     model_name: str = PRIMARY_GROQ_MODEL,
     temperature: float = 0.2,
     chat_history: Optional[List[Dict[str, str]]] = None,
-    groq_factory: Callable[..., Any] = Groq
+    groq_factory: Callable[..., Any] = Groq,
+    output_format: Optional[str] = None,
 ) -> str:
     """Sends context, conversation history, and question to Groq LLM for a grounded response with citations."""
     if not groq_api_key or not groq_api_key.strip():
@@ -478,12 +532,14 @@ def generate_answer(
     context_str, retained_sources = build_grounded_context_prompt(
         retrieved_chunks, max_token_budget=prompt_budget
     )
+    resolved_format = output_format or detect_output_format(query)
     system_prompt = GROUNDED_SYSTEM_PROMPT
     user_prompt = (
         f"USER QUESTION:\n{query}\n\n"
+        f"REQUESTED OUTPUT FORMAT: {resolved_format}\n"
         f"RELEVANT PEGA ACADEMY CONTEXT EXCERPTS:\n"
         f"{context_str}\n\n"
-        f"Answer clearly and naturally using only the verified excerpts above, with compact inline citations `[filename, Page X, Section: Y]`:"
+        f"{_format_instruction(resolved_format)}"
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -572,7 +628,8 @@ def stream_answer(
     model_name: str = PRIMARY_GROQ_MODEL,
     temperature: float = 0.0,
     chat_history: Optional[List[Dict[str, str]]] = None,
-    groq_factory: Callable[..., Any] = Groq
+    groq_factory: Callable[..., Any] = Groq,
+    output_format: Optional[str] = None,
 ):
     """
     Streams a grounded answer progressively while preserving token budgeting,
@@ -598,11 +655,13 @@ def stream_answer(
     )
     final_sources = deduplicate_sources(retained_sources)
 
+    resolved_format = output_format or detect_output_format(query)
     user_prompt = (
         f"USER QUESTION:\n{query}\n\n"
+        f"REQUESTED OUTPUT FORMAT: {resolved_format}\n"
         f"RELEVANT PEGA ACADEMY CONTEXT EXCERPTS:\n"
         f"{context_str}\n\n"
-        f"Answer clearly and naturally using only the verified excerpts above, with compact inline citations `[filename, Page X, Section: Y]`:"
+        f"{_format_instruction(resolved_format)}"
     )
 
     messages = [{"role": "system", "content": GROUNDED_SYSTEM_PROMPT}]
@@ -630,9 +689,16 @@ def stream_answer(
                     yield ev
                 elif ev["type"] == "complete":
                     completed_text = ev["text"]
-            verified_ans, _ = verify_citations(completed_text, final_sources)
+            verified_ans, cite_stats = verify_citations(completed_text, final_sources)
             prefix_note = f"> *Note: {model_notice}*\n\n" if model_notice else ""
-            yield {"type": "final", "answer": prefix_note + verified_ans, "sources": final_sources, "model_used": model_name}
+            yield {
+                "type": "final",
+                "answer": prefix_note + verified_ans,
+                "sources": final_sources,
+                "model_used": model_name,
+                "citation_stats": cite_stats,
+                "output_format": resolved_format,
+            }
             return
         except Exception as model_err:
             err_str = str(model_err)

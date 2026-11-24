@@ -4,6 +4,8 @@ import os
 from datetime import datetime
 import streamlit as st
 
+from rag_engine import ENABLE_ADAPTIVE_ROUTING
+
 
 def init_session_state() -> None:
     """Initializes all Streamlit session_state defaults if not yet present."""
@@ -57,6 +59,9 @@ def init_session_state() -> None:
 
     if "cfg_section_filter" not in st.session_state:
         st.session_state.cfg_section_filter = "All Sections"
+
+    if "cfg_adaptive_routing" not in st.session_state:
+        st.session_state.cfg_adaptive_routing = ENABLE_ADAPTIVE_ROUTING
 
 
 def queue_user_query(query_text: str) -> None:

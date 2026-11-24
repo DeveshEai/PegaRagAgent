@@ -188,7 +188,10 @@ def verify_citations(
         return full_cite
 
     verified_text = citation_pattern.sub(_check_match, answer_text)
-    verified_text = re.sub(r"  +", " ", verified_text).strip()
+    # Collapse only inline multi-spaces between non-space chars; preserve Markdown hard breaks ('  \n') and list indentation
+    verified_text = re.sub(r"(?<=\S) {2,}(?=\S)", " ", verified_text)
+    verified_text = re.sub(r"(?<! ) \n", "\n", verified_text)
+    verified_text = re.sub(r" +([.,;:!?])", r"\1", verified_text).strip()
     return verified_text, {
         "verified": verified_count,
         "removed": removed_count,
@@ -196,29 +199,62 @@ def verify_citations(
     }
 
 
+_FOLLOWUP_PHRASES = (
+    "step ", "elaborate", "explain more", "apply", "example",
+    "how about", "what about", "more details", "tell me more",
+)
+_FOLLOWUP_PRONOUN_RE = re.compile(r"\b(it|its|they|them|their|theirs|this|that|these|those)\b", re.IGNORECASE)
+_GREETING_ONLY_RE = re.compile(r"^(hi|hello|hey|thanks|thank you|ok|okay|cool|got it)[!. ]*$", re.IGNORECASE)
+
+
+def _extract_recent_subject(chat_history: List[Dict[str, str]]) -> str:
+    """Extract the most recent substantive topic from recent user/assistant turns."""
+    # Prefer the most recent substantive user question (skipping greetings or bare pronoun follow-ups)
+    for msg in reversed(chat_history[-6:]):
+        if msg.get("role") != "user":
+            continue
+        content = (msg.get("content") or "").strip()
+        if not content or _GREETING_ONLY_RE.match(content):
+            continue
+        # If this prior user turn is itself a bare pronoun follow-up (e.g. "What about retries?"), keep looking back
+        words = content.split()
+        if len(words) <= 6 and (_FOLLOWUP_PRONOUN_RE.search(content) or content.lower().startswith(("what about", "how about"))):
+            continue
+        return content[:200]
+
+    # Fallback: extract the first substantive sentence from the most recent assistant message
+    for msg in reversed(chat_history[-4:]):
+        if msg.get("role") != "assistant":
+            continue
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+        first_line = content.splitlines()[0].strip()
+        first_sentence = re.split(r"(?<=[.!?])\s+", first_line)[0].strip()
+        if len(first_sentence) >= 12:
+            return first_sentence[:200]
+    return ""
+
+
 def contextualize_query_with_history(
     query: str,
     chat_history: Optional[List[Dict[str, str]]] = None
 ) -> str:
     """
-    Expands short or referential follow-up questions with the previous user topic
-    so Hybrid BM25 + Vector retrieval maintains thread context.
+    Expands short or referential follow-up questions (including 'its'/'their')
+    with the most recent substantive conversation subject so Hybrid BM25 + Vector
+    retrieval maintains thread context without attaching the full history.
     """
     if not chat_history:
         return query
-    q_low = query.lower().strip()
-    referential_signals = (
-        "that", "this", "it", "they", "them", "those", "these",
-        "step ", "elaborate", "explain more", "apply", "example", "how about", "what about"
-    )
+    q_low = (query or "").lower().strip()
+    if not q_low:
+        return query
+
     is_short = len(q_low.split()) <= 10
-    if is_short or any(sig in q_low for sig in referential_signals):
-        prev_user_msgs = [
-            m.get("content", "").strip()
-            for m in chat_history
-            if m.get("role") == "user" and m.get("content", "").strip()
-        ]
-        if prev_user_msgs:
-            last_topic = prev_user_msgs[-1][:200]
+    has_referential = bool(_FOLLOWUP_PRONOUN_RE.search(q_low)) or any(sig in q_low for sig in _FOLLOWUP_PHRASES)
+    if is_short or has_referential:
+        last_topic = _extract_recent_subject(chat_history)
+        if last_topic and last_topic.lower() != q_low:
             return f"{last_topic} — {query}"
     return query

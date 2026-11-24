@@ -126,3 +126,26 @@ def test_streamlit_chat_demo_question_and_clear_chat(isolated_env, monkeypatch):
         assert at.session_state["messages"] == []
 
     st.cache_resource.clear()
+
+
+def test_sanitize_uploaded_filename_and_batch_launchers():
+    from ui.upload_panel import sanitize_uploaded_filename
+
+    assert sanitize_uploaded_filename("report.pdf") == "report.pdf"
+    assert sanitize_uploaded_filename("../../etc/passwd.pdf") == "passwd.pdf"
+    assert sanitize_uploaded_filename(r"..\..\Windows\evil.docx") == "evil.docx"
+    assert sanitize_uploaded_filename(r"C:\Users\hp\Desktop\spec:v1?.txt") == "spec_v1_.txt"
+    assert sanitize_uploaded_filename("...") == "uploaded_document"
+    assert sanitize_uploaded_filename("") == "uploaded_document"
+
+    project_root = Path(__file__).resolve().parent.parent
+    launch_bat = (project_root / "LAUNCH_AI_ASSISTANT.bat").read_text(encoding="utf-8")
+    downloader_bat = (project_root / "RUN_DOWNLOADER.bat").read_text(encoding="utf-8")
+
+    assert r"PEGA-EXP-1\Scripts\python.exe" in launch_bat
+    assert "streamlit run app.py" in launch_bat
+
+    assert r"PEGA-EXP-1\Scripts\python.exe" in downloader_bat
+    assert "pega_downloader.py" in downloader_bat
+    assert "download_challenges.py" in downloader_bat
+    assert downloader_bat.index("pega_downloader.py") < downloader_bat.index("download_challenges.py")

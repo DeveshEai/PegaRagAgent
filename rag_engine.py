@@ -37,6 +37,9 @@ from config.settings import (
     BM25_B,
     PRIMARY_GROQ_MODEL,
     FALLBACK_GROQ_MODEL,
+    ROUTER_MODEL,
+    ENABLE_ADAPTIVE_ROUTING,
+    MAX_ROUTING_ESCALATIONS,
     MODEL_REGISTRY,
     DEFAULT_UNKNOWN_SPEC,
     get_model_spec,
@@ -81,12 +84,27 @@ from agents.answer_generator import (
     execute_direct_grounded_fallback as _execute_direct_grounded_fallback_impl,
     generate_answer as _generate_answer_impl,
     stream_answer as _stream_answer_impl,
+    detect_output_format,
 )
 from agents.research_agent import (
     AGENT_SYSTEM_PROMPT,
     should_use_agent_loop,
+    detect_conversational_intent,
+    classify_query_intent as _classify_query_intent_impl,
+    evaluate_evidence_sufficiency,
     run_agent as _run_agent_impl,
     run_agent_stream as _run_agent_stream_impl,
+    run_adaptive as _run_adaptive_impl,
+    run_adaptive_stream as _run_adaptive_stream_impl,
+)
+from agents.routing_eval import (
+    PEGA_ROUTING_EVAL_DATASET,
+    RoutingMetricsTracker,
+    evaluate_routing_suite,
+    format_routing_eval_report,
+    get_routing_observability_summary,
+    record_routing_event,
+    sanitize_routing_record,
 )
 
 # ---------------------------------------------------------
@@ -832,6 +850,27 @@ class PegaRAGEngine:
             should_use_agent_fn=should_use_agent_loop,
         )
 
+    def detect_conversational_intent(self, query: str) -> Optional[Dict[str, Any]]:
+        return detect_conversational_intent(query)
+
+    def classify_query_intent(
+        self,
+        query: str,
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        groq_api_key: str = "",
+        answer_model_name: str = PRIMARY_GROQ_MODEL,
+        router_model: str = ROUTER_MODEL,
+    ) -> Dict[str, Any]:
+        return _classify_query_intent_impl(
+            query=query,
+            chat_history=chat_history,
+            groq_api_key=groq_api_key,
+            answer_model_name=answer_model_name,
+            router_model=router_model,
+            groq_factory=Groq,
+            should_use_agent_fn=should_use_agent_loop,
+        )
+
     def generate_answer(
         self,
         query: str,
@@ -907,4 +946,68 @@ class PegaRAGEngine:
             section_filter=section_filter,
             groq_factory=Groq,
             should_use_agent_fn=should_use_agent_loop,
+        )
+
+    def run_adaptive(
+        self,
+        query: str,
+        groq_api_key: str,
+        model_name: str = PRIMARY_GROQ_MODEL,
+        temperature: float = 0.0,
+        max_iterations: int = 4,
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        top_k: int = DEFAULT_FINAL_EVIDENCE_K,
+        use_reranker: bool = True,
+        dense_weight: float = 0.5,
+        section_filter: Optional[str] = None,
+        router_model: str = ROUTER_MODEL,
+        execution_mode: str = "adaptive",
+    ) -> Dict[str, Any]:
+        return _run_adaptive_impl(
+            engine=self,
+            query=query,
+            groq_api_key=groq_api_key,
+            model_name=model_name,
+            temperature=temperature,
+            max_iterations=max_iterations,
+            chat_history=chat_history,
+            top_k=top_k,
+            use_reranker=use_reranker,
+            dense_weight=dense_weight,
+            section_filter=section_filter,
+            router_model=router_model,
+            execution_mode=execution_mode,
+            groq_factory=Groq,
+        )
+
+    def run_adaptive_stream(
+        self,
+        query: str,
+        groq_api_key: str,
+        model_name: str = PRIMARY_GROQ_MODEL,
+        temperature: float = 0.0,
+        max_iterations: int = 4,
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        top_k: int = DEFAULT_FINAL_EVIDENCE_K,
+        use_reranker: bool = True,
+        dense_weight: float = 0.5,
+        section_filter: Optional[str] = None,
+        router_model: str = ROUTER_MODEL,
+        execution_mode: str = "adaptive",
+    ):
+        return _run_adaptive_stream_impl(
+            engine=self,
+            query=query,
+            groq_api_key=groq_api_key,
+            model_name=model_name,
+            temperature=temperature,
+            max_iterations=max_iterations,
+            chat_history=chat_history,
+            top_k=top_k,
+            use_reranker=use_reranker,
+            dense_weight=dense_weight,
+            section_filter=section_filter,
+            router_model=router_model,
+            execution_mode=execution_mode,
+            groq_factory=Groq,
         )

@@ -44,6 +44,20 @@ BM25_B = 0.75
 PRIMARY_GROQ_MODEL = "openai/gpt-oss-120b"
 FALLBACK_GROQ_MODEL = "openai/gpt-oss-20b"
 
+# Adaptive Query Routing Configuration (feature flag disabled until Stage 5 passes)
+ROUTER_MODEL = os.environ.get("PEGA_ROUTER_MODEL", "qwen/qwen3.8-27b")
+ENABLE_ADAPTIVE_ROUTING = os.environ.get("PEGA_ENABLE_ADAPTIVE_ROUTING", "false").lower() in ("1", "true", "yes")
+MAX_ROUTING_ESCALATIONS = 1
+ROUTER_TIMEOUT_SECONDS = float(os.environ.get("PEGA_ROUTER_TIMEOUT", "4.0"))
+INTENT_CATEGORIES = (
+    "SIMPLE_LOOKUP",
+    "TECHNICAL_EXPLANATION",
+    "COMPARISON",
+    "COMPLEX_ARCHITECTURE",
+    "MULTI_DOCUMENT_RESEARCH",
+    "STEP_BY_STEP_CHALLENGE",
+)
+
 MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
     # Primary & Fallback Production Tool-Capable Models (131K context)
     "openai/gpt-oss-120b": {

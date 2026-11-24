@@ -1,7 +1,9 @@
 """Upload & Add More Files + Sync Live Files panel for PegaRagAgent."""
 
 import html
+import re
 import time
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
@@ -9,6 +11,16 @@ import streamlit as st
 import rag_engine
 from rag_engine import compute_file_hash
 from ui.styles import LUCIDE_ICONS
+
+
+def sanitize_uploaded_filename(raw_name: str) -> str:
+    """Strips directory components and unsafe characters from an uploaded filename."""
+    normalized = (raw_name or "").replace("\\", "/")
+    base = Path(normalized).name.strip().lstrip(".")
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", base).strip()
+    if not cleaned or cleaned in {".", ".."}:
+        return "uploaded_document"
+    return cleaned
 
 
 def render_upload_panel(engine: Any) -> None:
@@ -55,18 +67,20 @@ def render_upload_panel(engine: Any) -> None:
             )
 
         if upload_clicked and up_files:
-            target_dir = rag_engine.DOCS_DIR / "06_Custom_Materials"
+            target_dir = (rag_engine.DOCS_DIR / "06_Custom_Materials").resolve()
             target_dir.mkdir(parents=True, exist_ok=True)
             custom_doc_name = doc_name_input.strip() if doc_name_input else ""
             total_added = 0
             for f_obj in up_files:
-                dest = target_dir / f_obj.name
+                safe_name = sanitize_uploaded_filename(f_obj.name)
+                dest = (target_dir / safe_name).resolve()
+                dest.relative_to(target_dir)
                 with open(dest, "wb") as out_f:
                     out_f.write(f_obj.getbuffer())
                 chunks_count = engine.chunk_and_index_file(dest)
                 total_added += chunks_count
                 manifest = engine.load_manifest()
-                rel_path = str(dest.relative_to(rag_engine.WORKSPACE_DIR))
+                rel_path = str(dest.relative_to(rag_engine.WORKSPACE_DIR.resolve()))
                 manifest_entry = {
                     "hash": compute_file_hash(dest),
                     "file_name": dest.name,
